@@ -1,6 +1,6 @@
 /**
  * Chi Voice System - TTS y STT
- * Integración con Fish Audio (TTS) y Deepgram (STT)
+ * Deepgram para todo (STT + TTS) - $200 créditos disponibles
  */
 
 const fs = require('fs').promises;
@@ -8,228 +8,179 @@ const path = require('path');
 
 class ChiVoice {
   constructor(options = {}) {
-    this.ttsProvider = options.ttsProvider || 'fish-audio'; // 'fish-audio', 'openai', 'edge'
-    this.sttProvider = options.sttProvider || 'deepgram'; // 'deepgram', 'whisper', 'assemblyai'
-    
-    // API Keys (deben configurarse via env vars)
-    this.fishApiKey = process.env.FISH_AUDIO_API_KEY;
+    this.provider = 'deepgram'; // Unificado: Deepgram hace TTS y STT
     this.deepgramApiKey = process.env.DEEPGRAM_API_KEY;
-    this.openaiApiKey = process.env.OPENAI_API_KEY;
-    
-    // Configuración de voz
-    this.voiceId = options.voiceId || 'default'; // Fish Audio voice ID
-    this.language = options.language || 'es'; // es, en
-    
-    // Directorio para archivos de audio
+    this.language = options.language || 'es';
     this.audioDir = options.audioDir || './audio';
+    
+    if (!this.deepgramApiKey) {
+      throw new Error('DEEPGRAM_API_KEY requerida');
+    }
   }
 
   /**
    * Text-to-Speech: Convierte texto a audio
+   * Usa Deepgram Aura (TTS de alta calidad)
    */
   async speak(text, options = {}) {
-    switch (this.ttsProvider) {
-      case 'fish-audio':
-        return this.speakFishAudio(text, options);
-      case 'openai':
-        return this.speakOpenAI(text, options);
-      case 'edge':
-        return this.speakEdge(text, options);
-      default:
-        throw new Error(`TTS provider no soportado: ${this.ttsProvider}`);
-    }
-  }
-
-  /**
-   * Fish Audio TTS - Calidad #1, precio competitivo
-   */
-  async speakFishAudio(text, options = {}) {
-    if (!this.fishApiKey) {
-      throw new Error('FISH_AUDIO_API_KEY no configurada');
-    }
-
-    const response = await fetch('https://api.fish.audio/v1/tts', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.fishApiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        text,
-        voice_id: options.voiceId || this.voiceId,
-        language: options.language || this.language,
-        speed: options.speed || 1.0,
-        format: 'mp3'
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Fish Audio error: ${response.status}`);
-    }
-
-    const audioBuffer = await response.arrayBuffer();
-    const filename = `chi-tts-${Date.now()}.mp3`;
-    const filepath = path.join(this.audioDir, filename);
+    // Modelos de voz Deepgram Aura
+    const model = options.model || 'aura-asteria-en'; // asteria, luna, stella, etc.
+    const encoding = options.encoding || 'mp3';
     
-    await fs.mkdir(this.audioDir, { recursive: true });
-    await fs.writeFile(filepath, Buffer.from(audioBuffer));
-    
-    return {
-      filepath,
-      filename,
-      text,
-      provider: 'fish-audio',
-      timestamp: Date.now()
-    };
-  }
-
-  /**
-   * OpenAI TTS - Fallback confiable
-   */
-  async speakOpenAI(text, options = {}) {
-    if (!this.openaiApiKey) {
-      throw new Error('OPENAI_API_KEY no configurada');
-    }
-
-    const response = await fetch('https://api.openai.com/v1/audio/speech', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.openaiApiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'tts-1',
-        voice: options.voice || 'nova', // alloy, echo, fable, onyx, nova, shimmer
-        input: text,
-        speed: options.speed || 1.0
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenAI TTS error: ${response.status}`);
-    }
-
-    const audioBuffer = await response.arrayBuffer();
-    const filename = `chi-tts-${Date.now()}.mp3`;
-    const filepath = path.join(this.audioDir, filename);
-    
-    await fs.mkdir(this.audioDir, { recursive: true });
-    await fs.writeFile(filepath, Buffer.from(audioBuffer));
-    
-    return {
-      filepath,
-      filename,
-      text,
-      provider: 'openai',
-      timestamp: Date.now()
-    };
-  }
-
-  /**
-   * Deepgram STT - Speech-to-Text
-   */
-  async listen(audioBuffer, options = {}) {
-    if (!this.deepgramApiKey) {
-      throw new Error('DEEPGRAM_API_KEY no configurada');
-    }
-
-    const model = options.model || 'nova-3'; // nova-3, nova-2, enhanced
-    const language = options.language || this.language;
-
     const response = await fetch(
-      `https://api.deepgram.com/v1/listen?model=${model}&language=${language}&punctuate=true&smart_format=true`,
+      `https://api.deepgram.com/v1/speak?model=${model}&encoding=${encoding}`,
       {
         method: 'POST',
         headers: {
           'Authorization': `Token ${this.deepgramApiKey}`,
-          'Content-Type': 'audio/wav' // o audio/mp3, audio/ogg
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ text })
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Deepgram TTS error ${response.status}: ${error}`);
+    }
+
+    const audioBuffer = await response.arrayBuffer();
+    const filename = `chi-voz-${Date.now()}.mp3`;
+    const filepath = path.join(this.audioDir, filename);
+    
+    await fs.mkdir(this.audioDir, { recursive: true });
+    await fs.writeFile(filepath, Buffer.from(audioBuffer));
+    
+    return {
+      filepath,
+      filename,
+      text,
+      provider: 'deepgram-tts',
+      model,
+      timestamp: Date.now()
+    };
+  }
+
+  /**
+   * Speech-to-Text: Convierte audio a texto
+   * Usa Deepgram Nova-3 (mejor precisión)
+   */
+  async listen(audioBuffer, options = {}) {
+    const model = options.model || 'nova-3';
+    const language = options.language || this.language;
+    const contentType = options.contentType || 'audio/mp3';
+
+    const response = await fetch(
+      `https://api.deepgram.com/v1/listen?model=${model}&language=${language}&punctuate=true&smart_format=true&diarize=true`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Token ${this.deepgramApiKey}`,
+          'Content-Type': contentType
         },
         body: audioBuffer
       }
     );
 
     if (!response.ok) {
-      throw new Error(`Deepgram error: ${response.status}`);
+      const error = await response.text();
+      throw new Error(`Deepgram STT error ${response.status}: ${error}`);
     }
 
     const result = await response.json();
+    const alternative = result.results?.channels[0]?.alternatives[0];
     
     return {
-      text: result.results?.channels[0]?.alternatives[0]?.transcript || '',
-      confidence: result.results?.channels[0]?.alternatives[0]?.confidence || 0,
-      words: result.results?.channels[0]?.alternatives[0]?.words || [],
-      provider: 'deepgram',
+      text: alternative?.transcript || '',
+      confidence: alternative?.confidence || 0,
+      words: alternative?.words || [],
+      paragraphs: result.results?.channels[0]?.alternatives[0]?.paragraphs || [],
+      provider: 'deepgram-stt',
+      model,
       timestamp: Date.now()
     };
   }
 
   /**
-   * Whisper STT (OpenAI) - Fallback
+   * Transcribe archivo de audio desde path
    */
-  async listenWhisper(audioBuffer, options = {}) {
-    if (!this.openaiApiKey) {
-      throw new Error('OPENAI_API_KEY no configurada');
+  async transcribeFile(filepath, options = {}) {
+    const buffer = await fs.readFile(filepath);
+    const ext = path.extname(filepath).toLowerCase();
+    
+    const contentTypeMap = {
+      '.mp3': 'audio/mp3',
+      '.wav': 'audio/wav',
+      '.ogg': 'audio/ogg',
+      '.m4a': 'audio/m4a',
+      '.webm': 'audio/webm'
+    };
+    
+    options.contentType = contentTypeMap[ext] || 'audio/mp3';
+    return this.listen(buffer, options);
+  }
+
+  /**
+   * Genera audio y devuelve buffer (sin guardar archivo)
+   */
+  async speakBuffer(text, options = {}) {
+    const model = options.model || 'aura-asteria-en';
+    
+    const response = await fetch(
+      `https://api.deepgram.com/v1/speak?model=${model}&encoding=mp3`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Token ${this.deepgramApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ text })
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Deepgram TTS error ${response.status}`);
     }
 
-    const formData = new FormData();
-    formData.append('file', new Blob([audioBuffer]), 'audio.wav');
-    formData.append('model', 'whisper-1');
-    formData.append('language', options.language || this.language);
-    formData.append('response_format', 'json');
+    return Buffer.from(await response.arrayBuffer());
+  }
 
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
+  /**
+   * Verifica saldo y estado de la cuenta
+   */
+  async checkStatus() {
+    const response = await fetch('https://api.deepgram.com/v1/projects', {
       headers: {
-        'Authorization': `Bearer ${this.openaiApiKey}`
-      },
-      body: formData
+        'Authorization': `Token ${this.deepgramApiKey}`
+      }
     });
 
     if (!response.ok) {
-      throw new Error(`Whisper error: ${response.status}`);
+      throw new Error('No se pudo verificar estado de Deepgram');
     }
 
-    const result = await response.json();
-    
+    const data = await response.json();
     return {
-      text: result.text || '',
-      confidence: 0, // Whisper no devuelve confidence
-      provider: 'whisper',
-      timestamp: Date.now()
+      projects: data.projects?.length || 0,
+      status: 'active',
+      provider: 'deepgram'
     };
   }
 
   /**
-   * Configuración de voz de marca Chi
+   * Estima costo de uso mensual
+   * Deepgram: TTS ~$4/hora, STT ~$4.30/1000min
    */
-  getVoiceConfig() {
-    return {
-      // Configuración optimizada para "sonar como Chi"
-      fishAudio: {
-        // TODO: Entrenar voz personalizada con muestras
-        // Por ahora usar voz predefinida más cercana
-        voiceId: 'es-male-1', // Placeholder
-        speed: 1.1, // Ligeramente más rápido = más eficiente
-        tone: 'professional-warm'
-      },
-      openai: {
-        voice: 'nova', // Más cálida, menos robótica
-        speed: 1.1
-      }
-    };
-  }
-
-  /**
-   * Costo estimado por uso
-   */
-  estimateCost(charsPerMonth = 100000) {
-    const fishCost = (charsPerMonth / 1000000) * 15; // $15 por 1M chars
-    const openaiCost = (charsPerMonth / 1000) * 0.015; // $0.015 por 1K chars
+  estimateCost(hoursTTS = 10, minutesSTT = 500) {
+    const ttsCost = hoursTTS * 4; // $4 por hora de audio generado
+    const sttCost = (minutesSTT / 1000) * 4.30; // $4.30 por 1000 minutos
     
     return {
-      fishAudio: fishCost,
-      openai: openaiCost,
-      savings: ((openaiCost - fishCost) / openaiCost * 100).toFixed(1) + '%'
+      tts: ttsCost.toFixed(2),
+      stt: sttCost.toFixed(2),
+      total: (ttsCost + sttCost).toFixed(2),
+      currency: 'USD',
+      remaining: 200 - (ttsCost + sttCost) // Créditos restantes de $200
     };
   }
 }
